@@ -138,25 +138,21 @@
            mean-base-time-per-call (if (pos? base-total-calls)
                                      (/ base-total-time base-total-calls)
                                      0)
+           comparison-total-calls (:total-calls endpoint-val)
            mean-comparison-time-per-call (/ (:total-time endpoint-val)
-                                            (:total-calls endpoint-val))]
+                                            comparison-total-calls)]
        (assoc acc
          endpoint-name
          {:mean-total-time-increase-over-base (- mean-comparison-time-per-call
                                                  mean-base-time-per-call)
           :mean-base-time-per-call mean-base-time-per-call
           :mean-comparison-time-per-call mean-comparison-time-per-call
+          :total-base-calls base-total-calls
+          :total-comparison-calls comparison-total-calls
           :methods (filter-for-methods-having-greater-mean-total-time-per-call
                     (:methods endpoint-val)
                     base
-                    endpoint-name)})
-       #_(assoc acc
-           endpoint-name
-           (update (val endpoint)
-                   :methods
-                   filter-for-methods-having-greater-mean-total-time-per-call
-                   base
-                   endpoint-name))))
+                    endpoint-name)})))
    {}
    comparison))
 
@@ -188,17 +184,7 @@
                (assoc
                  :name
                  (key endpoint))))
-            endpoints))
-
-  #_(reduce
-     (fn [acc endpoint]
-       (assoc acc (key endpoint)
-                  (update (val endpoint)
-                          :methods
-                          sort-methods-by-mean-total-time-per-call
-                          method-sort-keys)))
-     {}
-     endpoints))
+            endpoints)))
 
 (defn write-to-json-file
   [profile-data output-file]
@@ -217,17 +203,23 @@
     (.write wrtr (string/join "  "
                               ["mean inc over base"
                                "mean total time per call"
-                               "method name"]))
+                               "calls in base"
+                               "calls in comparison"
+                               "endpoint name"]))
     (.newLine wrtr)
-    (.write wrtr (apply str (repeat 70 "-")))
+    (.write wrtr (apply str (repeat 100 "-")))
     (.newLine wrtr)
     (doseq [{:keys [mean-total-time-increase-over-base
                     mean-comparison-time-per-call
+                    total-base-calls
+                    total-comparison-calls
                     name]} profile]
       (.write wrtr (string/join
                     "  "
                     [(format "%18.6f" mean-total-time-increase-over-base)
                      (format "%24.6f" mean-comparison-time-per-call)
+                     (format "%13d" total-base-calls)
+                     (format "%19d" total-comparison-calls)
                      name]))
       (.newLine wrtr))
     (.newLine wrtr)
