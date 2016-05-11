@@ -5,9 +5,11 @@
      [cheshire.core :as cheshire]))
 
 (defn find-json-files
-  [dir]
-  (filter #(and (.endsWith (.getName %) ".json")
-                (not (string/includes? % "file_metadata")))
+  [dir extra-filter]
+  (filter #(let [path (.getPath %)]
+            (and (.endsWith path ".json")
+                 (or (nil? extra-filter)
+                     (not (re-find (re-pattern extra-filter) path)))))
           (file-seq (io/file dir))))
 
 (defn update-method-entry
@@ -63,7 +65,7 @@
    (get profile-data "methods")))
 
 (defn sum-endpoint-info-for-dir
-  [dir]
+  [dir file-filter]
   (reduce
    (fn [acc json-file]
      (update acc
@@ -71,7 +73,7 @@
              update-file-entry
              (cheshire/parse-stream (io/reader json-file))))
    {}
-   (find-json-files dir)))
+   (find-json-files dir file-filter)))
 
 (defn add-mean-total-time-per-call-to-methods
   [methods]
@@ -88,7 +90,7 @@
    methods))
 
 (defn average-endpoint-info-for-dir
-  [dir]
+  [dir file-filter]
   (reduce
    (fn [acc endpoint]
      (assoc acc (key endpoint)
@@ -96,7 +98,7 @@
                            [:methods]
                            add-mean-total-time-per-call-to-methods)))
    {}
-   (sum-endpoint-info-for-dir dir)))
+   (sum-endpoint-info-for-dir dir file-filter)))
 
 (defn filter-for-methods-having-greater-mean-total-time-per-call
   [methods base endpoint-name]
@@ -259,23 +261,22 @@
       (.newLine wrtr))))
 
 (defn process-one-profile-dir
-  [base-dir output-dir]
+  [base-dir output-dir file-filter]
   (let [output-file (str output-dir "/one-aggregated-profile.json")]
     (write-to-json-file
      (sort-methods-in-endpoints-by-mean-total-time-per-call
-      (average-endpoint-info-for-dir
-       base-dir)
+      (average-endpoint-info-for-dir base-dir file-filter)
       :total-time
       :mean-total-time-per-call)
      output-file)
     output-file))
 
 (defn compare-profile-dirs
-  [base-dir compare-dir output-dir]
+  [base-dir compare-dir output-dir file-filter]
   (let [base-profile-data
-        (average-endpoint-info-for-dir base-dir)
+        (average-endpoint-info-for-dir base-dir file-filter)
         compare-profile-data
-        (average-endpoint-info-for-dir compare-dir)
+        (average-endpoint-info-for-dir compare-dir file-filter)
         base-greater-than-compare-data
         (sort-methods-in-endpoints-by-mean-total-time-per-call
          (filter-for-endpoint-methods-having-greater-mean-total-time-per-call
@@ -332,6 +333,11 @@
     :id :compare-dir
     :default nil
     :parse-fn identity]
+   ["-f" "--filter FILTER_FILE_EXPRESSION"
+    "Filter out any json files matching the supplied expression"
+    :id :file-filter
+    :default nil
+    :parse-fn identity]
    ["-h" "--help"]])
 
 (defn usage [options-summary]
@@ -355,21 +361,22 @@
 
 (defn -main
   [& args]
-  (let [{:keys [options arguments errors summary] :as allstuff}
+  (let [{:keys [options arguments errors summary]}
         (cli/parse-opts args cli-options)]
     (cond
       (:help options) (exit 0 (usage summary))
       (not= (count arguments) 1) (exit 1 (usage summary))
       errors (exit 1 (error-msg errors)))
     (let [base-dir (first arguments)
-          output-dir (:output-dir options)]
+          output-dir (:output-dir options)
+          file-filter (:file-filter options)]
       (if-let [compare-dir (:compare-dir options)]
         (do
           (println "Comparing two profile directories...")
-          (compare-profile-dirs base-dir compare-dir output-dir)
+          (compare-profile-dirs base-dir compare-dir output-dir file-filter)
           (printf "Wrote files to: %s\n" output-dir))
         (do
           (printf "Processing a single profile dir: %s...\n"
                   base-dir)
           (printf "Wrote file: %s\n"
-                  (process-one-profile-dir base-dir output-dir)))))))
+                  (process-one-profile-dir base-dir output-dir file-filter)))))))
