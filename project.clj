@@ -5,7 +5,8 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [org.clojure/tools.cli "0.3.5"]
-                 [cheshire "5.3.1"]]
+                 [cheshire "5.3.1"]
+                 [me.raynes/fs "1.4.6"]]
   :main ^:skip-aot jruby-profile-aggregator.core
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all}})

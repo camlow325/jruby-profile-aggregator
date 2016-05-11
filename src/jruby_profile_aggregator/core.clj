@@ -1,8 +1,9 @@
 (ns jruby-profile-aggregator.core
-    (:require [clojure.java.io :as io]
-     [clojure.string :as string]
-     [clojure.tools.cli :as cli]
-     [cheshire.core :as cheshire]))
+  (:require [clojure.java.io :as io]
+            [clojure.string :as string]
+            [clojure.tools.cli :as cli]
+            [cheshire.core :as cheshire]
+            [me.raynes.fs :as fs]))
 
 (defn find-json-files
   [dir extra-filter]
@@ -190,14 +191,14 @@
             endpoints))
 
   #_(reduce
-   (fn [acc endpoint]
-     (assoc acc (key endpoint)
-                (update (val endpoint)
-                        :methods
-                        sort-methods-by-mean-total-time-per-call
-                        method-sort-keys)))
-   {}
-   endpoints))
+     (fn [acc endpoint]
+       (assoc acc (key endpoint)
+                  (update (val endpoint)
+                          :methods
+                          sort-methods-by-mean-total-time-per-call
+                          method-sort-keys)))
+     {}
+     endpoints))
 
 (defn write-to-json-file
   [profile-data output-file]
@@ -225,8 +226,7 @@
                     name]} profile]
       (.write wrtr (string/join
                     "  "
-                    [
-                     (format "%18.6f" mean-total-time-increase-over-base)
+                    [(format "%18.6f" mean-total-time-increase-over-base)
                      (format "%24.6f" mean-comparison-time-per-call)
                      name]))
       (.newLine wrtr))
@@ -253,8 +253,7 @@
               (:methods endpoint)]
         (.write wrtr (string/join
                       "  "
-                      [
-                       (format "%18.6f" mean-total-time-increase-over-base)
+                      [(format "%18.6f" mean-total-time-increase-over-base)
                        (format "%24.6f" mean-total-time-per-call)
                        name]))
         (.newLine wrtr))
@@ -324,15 +323,21 @@
      compare-greater-than-base-data
      (str output-dir "/compare-greater-aggregated-profile.txt"))))
 
+(defn canonicalized-path
+  [raw-path]
+  (-> raw-path fs/file (.getCanonicalPath)))
+
 (def cli-options
   [["-o" "--output-dir OUTPUT_DIR" "Output directory"
     :id :output-dir
     :default "."
-    :parse-fn identity]
+    :parse-fn canonicalized-path
+    :validate [fs/readable? "Output directory must be readable"]]
    ["-c" "--compare-dir COMPARE_DIR" "Compare directory with json files"
     :id :compare-dir
     :default nil
-    :parse-fn identity]
+    :parse-fn canonicalized-path
+    :validate [fs/readable? "Compare directory must be readable"]]
    ["-f" "--filter FILTER_FILE_EXPRESSION"
     "Filter out any json files matching the supplied expression"
     :id :file-filter
@@ -367,7 +372,7 @@
       (:help options) (exit 0 (usage summary))
       (not= (count arguments) 1) (exit 1 (usage summary))
       errors (exit 1 (error-msg errors)))
-    (let [base-dir (first arguments)
+    (let [base-dir (-> arguments first canonicalized-path)
           output-dir (:output-dir options)
           file-filter (:file-filter options)]
       (if-let [compare-dir (:compare-dir options)]
