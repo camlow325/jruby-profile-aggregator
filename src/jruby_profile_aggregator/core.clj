@@ -101,33 +101,45 @@
    {}
    (sum-endpoint-info-for-dir-or-file dir file-filter)))
 
-(defn filter-for-methods-having-greater-mean-total-time-per-call
-  [methods base endpoint-name]
+(defn filter-for-methods-having-greater-total-time-per-endpoint-call
+  [methods-in-comparison
+   base
+   endpoint-name
+   total-endpoint-calls-in-comparison
+   total-endpoint-calls-in-base]
   (reduce
    (fn [acc method]
      (let [method-name (key method)
-           mean-time-in-comparison
-           (:mean-total-time-per-call (val method))
-           mean-time-in-base
-           (get-in base [endpoint-name
-                         :methods
-                         method-name
-                         :mean-total-time-per-call])
-           mean-total-time-increase-over-base
-           (if (nil? mean-time-in-base)
-             mean-time-in-comparison
-             (- mean-time-in-comparison mean-time-in-base))]
-       (if (pos? mean-total-time-increase-over-base)
+           total-time-per-endpoint-call-in-comparison (/
+                                                       (:total-time
+                                                        (val method))
+                                                       total-endpoint-calls-in-comparison)
+           total-time-in-base (get-in base [endpoint-name
+                                            :methods
+                                            method-name
+                                            :total-time])
+           total-time-increase-per-endpoint-call-over-base (if
+                                                             (nil?
+                                                              total-time-in-base)
+                                                              total-time-per-endpoint-call-in-comparison
+                                                              (-
+                                                               total-time-per-endpoint-call-in-comparison
+                                                               (/
+                                                                total-time-in-base
+                                                                total-endpoint-calls-in-base)))]
+       (if (pos? total-time-increase-per-endpoint-call-over-base)
          (assoc acc
            method-name
            (assoc (val method)
-             :mean-total-time-increase-over-base
-             mean-total-time-increase-over-base))
+             :total-time-increase-per-endpoint-call-over-base
+             total-time-increase-per-endpoint-call-over-base
+             :total-time-per-endpoint-call
+             total-time-per-endpoint-call-in-comparison))
          acc)))
    {}
-   methods))
+   methods-in-comparison))
 
-(defn filter-for-endpoint-methods-having-greater-mean-total-time-per-call
+(defn filter-for-endpoint-methods-having-greater-total-time
   [base comparison]
   (reduce
    (fn [acc endpoint]
@@ -149,14 +161,46 @@
           :mean-comparison-time-per-call mean-comparison-time-per-call
           :total-base-calls base-total-calls
           :total-comparison-calls comparison-total-calls
-          :methods (filter-for-methods-having-greater-mean-total-time-per-call
+          :methods (filter-for-methods-having-greater-total-time-per-endpoint-call
                     (:methods endpoint-val)
                     base
-                    endpoint-name)})))
+                    endpoint-name
+                    comparison-total-calls
+                    base-total-calls)})))
    {}
    comparison))
 
-(defn sort-methods-by-mean-total-time-per-call
+(defn flip-method-base-and-comparison-elements
+  [methods]
+  (mapv
+   #(-> %
+       (assoc :total-time-increase-per-endpoint-call-over-comparison
+              (:total-time-increase-per-endpoint-call-over-base %))
+       (dissoc :total-time-increase-per-endpoint-call-over-base))
+   methods))
+
+(defn flip-endpoint-base-and-comparison-elements
+  [endpoints]
+  (mapv
+   #(let [{:keys [mean-total-time-increase-over-base
+                  mean-base-time-per-call
+                  mean-comparison-time-per-call
+                  total-base-calls
+                  total-comparison-calls
+                  methods
+                  name]}
+          %]
+     {:name name
+      :mean-total-time-increase-over-comparison
+      mean-total-time-increase-over-base
+      :mean-base-time-per-call mean-comparison-time-per-call
+      :mean-comparison-time-per-call mean-base-time-per-call
+      :total-base-calls total-comparison-calls
+      :total-comparison-calls total-base-calls
+      :methods (flip-method-base-and-comparison-elements methods)})
+   endpoints))
+
+(defn sort-methods
   [methods method-sort-keys]
   (sort-by method-sort-keys
            (fn [key1 key2]
@@ -169,7 +213,7 @@
                 (key method-info)))
             methods)))
 
-(defn sort-methods-in-endpoints-by-mean-total-time-per-call
+(defn sort-methods-in-endpoints
   [endpoints endpoint-sort-keys method-sort-keys]
   (sort-by endpoint-sort-keys
            (fn [key1 key2]
@@ -179,7 +223,7 @@
               (->
                (update (val endpoint)
                        :methods
-                       sort-methods-by-mean-total-time-per-call
+                       sort-methods
                        method-sort-keys)
                (assoc
                  :name
@@ -219,7 +263,7 @@
    (io/writer output-file)))
 
 (defn write-to-flat-file
-  [profile output-file]
+  [profile output-file flip-base-vs-comparison-data?]
   (with-open [wrtr (io/writer output-file)]
     (.write wrtr (apply str (repeat 35 "-")))
     (.newLine wrtr)
@@ -227,11 +271,17 @@
     (.newLine wrtr)
     (.newLine wrtr)
     (.write wrtr (string/join "  "
-                              ["mean inc over base"
-                               "mean total time per call"
-                               "calls in base"
-                               "calls in comparison"
-                               "endpoint name"]))
+                              (if flip-base-vs-comparison-data?
+                                ["mean inc over comp"
+                                 "mean total time per call"
+                                 "calls in comp"
+                                 "calls in base"
+                                 "endpoint name"]
+                                ["mean inc over base"
+                                 "mean total time per call"
+                                 "calls in base"
+                                 "calls in comp"
+                                 "endpoint name"])))
     (.newLine wrtr)
     (.write wrtr (apply str (repeat 100 "-")))
     (.newLine wrtr)
@@ -245,7 +295,7 @@
                     [(format "%18.6f" mean-total-time-increase-over-base)
                      (format "%24.6f" mean-comparison-time-per-call)
                      (format "%13d" total-base-calls)
-                     (format "%19d" total-comparison-calls)
+                     (format "%13d" total-comparison-calls)
                      name]))
       (.newLine wrtr))
     (.newLine wrtr)
@@ -259,20 +309,25 @@
       (.newLine wrtr)
       (.newLine wrtr)
       (.write wrtr (string/join "  "
-                                ["mean inc over base"
-                                 "mean total time per call"
-                                 "method name"]))
+                                (if flip-base-vs-comparison-data?
+                                  ["inc over comp per endpoint call"
+                                   "total time per endpoint call"
+                                   "method name"]
+                                  ["inc over base per endpoint call"
+                                   "total time per endpoint call"
+                                   "method name"])))
       (.newLine wrtr)
       (.write wrtr (apply str (repeat 70 "-")))
       (.newLine wrtr)
-      (doseq [{:keys [mean-total-time-increase-over-base
-                      mean-total-time-per-call
+      (doseq [{:keys [total-time-increase-per-endpoint-call-over-base
+                      total-time-per-endpoint-call
                       name]}
               (:methods endpoint)]
         (.write wrtr (string/join
                       "  "
-                      [(format "%18.6f" mean-total-time-increase-over-base)
-                       (format "%24.6f" mean-total-time-per-call)
+                      [(format "%31.6f"
+                               total-time-increase-per-endpoint-call-over-base)
+                       (format "%28.6f" total-time-per-endpoint-call)
                        name]))
         (.newLine wrtr))
       (.newLine wrtr))))
@@ -281,61 +336,64 @@
   [base-dir output-dir file-filter]
   (let [output-file (str output-dir "/one-aggregated-profile.json")]
     (write-to-json-file
-     (sort-methods-in-endpoints-by-mean-total-time-per-call
+     (sort-methods-in-endpoints
       (average-endpoint-info-for-dir base-dir file-filter)
       :total-time
-      :mean-total-time-per-call)
+      :total-time)
      output-file)
     output-file))
 
 (defn compare-profile-dirs
   [base-profile-data compare-profile-data output-dir]
   (let [base-greater-than-compare-data
-        (sort-methods-in-endpoints-by-mean-total-time-per-call
-         (filter-for-endpoint-methods-having-greater-mean-total-time-per-call
+        (sort-methods-in-endpoints
+         (filter-for-endpoint-methods-having-greater-total-time
           compare-profile-data
           base-profile-data)
          (juxt
           :mean-total-time-increase-over-base
           :mean-comparison-time-per-call)
          (juxt
-          :mean-total-time-increase-over-base
-          :mean-total-time-per-call))
+          :total-time-increase-per-endpoint-call-over-base
+          :total-time-per-endpoint-call))
         compare-greater-than-base-data
-        (sort-methods-in-endpoints-by-mean-total-time-per-call
-         (filter-for-endpoint-methods-having-greater-mean-total-time-per-call
+        (sort-methods-in-endpoints
+         (filter-for-endpoint-methods-having-greater-total-time
           base-profile-data
           compare-profile-data)
          (juxt
           :mean-total-time-increase-over-base
           :mean-comparison-time-per-call)
          (juxt
-          :mean-total-time-increase-over-base
-          :mean-total-time-per-call))]
+          :total-time-increase-per-endpoint-call-over-base
+          :total-time-per-endpoint-call))]
     (write-to-json-file
-     (sort-methods-in-endpoints-by-mean-total-time-per-call
+     (sort-methods-in-endpoints
       base-profile-data
       :total-time
       :mean-total-time-per-call)
      (str output-dir "/base-aggregated-profile.json"))
     (write-to-json-file
-     (sort-methods-in-endpoints-by-mean-total-time-per-call
+     (sort-methods-in-endpoints
       compare-profile-data
       :total-time
       :mean-total-time-per-call)
      (str output-dir "/compare-aggregated-profile.json"))
     (write-to-json-file
-     base-greater-than-compare-data
+     (flip-endpoint-base-and-comparison-elements
+      base-greater-than-compare-data)
      (str output-dir "/base-greater-aggregated-profile.json"))
     (write-to-flat-file
      base-greater-than-compare-data
-     (str output-dir "/base-greater-aggregated-profile.txt"))
+     (str output-dir "/base-greater-aggregated-profile.txt")
+     true)
     (write-to-json-file
      compare-greater-than-base-data
      (str output-dir "/compare-greater-aggregated-profile.json"))
     (write-to-flat-file
      compare-greater-than-base-data
-     (str output-dir "/compare-greater-aggregated-profile.txt"))))
+     (str output-dir "/compare-greater-aggregated-profile.txt")
+     false)))
 
 (defn canonicalized-path
   [raw-path]
