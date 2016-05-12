@@ -65,7 +65,7 @@
    (update-summary-totals-for-file-entry entry profile-data)
    (get profile-data "methods")))
 
-(defn sum-endpoint-info-for-dir
+(defn sum-endpoint-info-for-dir-or-file
   [dir file-filter]
   (reduce
    (fn [acc json-file]
@@ -99,7 +99,7 @@
                            [:methods]
                            add-mean-total-time-per-call-to-methods)))
    {}
-   (sum-endpoint-info-for-dir dir file-filter)))
+   (sum-endpoint-info-for-dir-or-file dir file-filter)))
 
 (defn filter-for-methods-having-greater-mean-total-time-per-call
   [methods base endpoint-name]
@@ -186,11 +186,37 @@
                  (key endpoint))))
             endpoints)))
 
+(defn hash-methods-by-name
+  [methods]
+  (reduce
+   (fn [acc method-info]
+     (assoc acc (:name method-info)
+                (dissoc method-info :name)))
+   {}
+   methods))
+
+(defn hash-endpoints-by-name
+  [endpoints]
+  (reduce
+   (fn [acc endpoint-info]
+     (assoc acc (:name endpoint-info)
+                (-> endpoint-info
+                    (update :methods
+                            hash-methods-by-name)
+                    (dissoc :name))))
+   {}
+   endpoints))
+
+(defn load-average-endpoint-info-from-json-file
+  [input-file]
+  (hash-endpoints-by-name
+   (cheshire/parse-stream (io/reader input-file) true)))
+
 (defn write-to-json-file
   [profile-data output-file]
   (cheshire/generate-stream
    profile-data
-   (clojure.java.io/writer output-file)))
+   (io/writer output-file)))
 
 (defn write-to-flat-file
   [profile output-file]
@@ -263,12 +289,8 @@
     output-file))
 
 (defn compare-profile-dirs
-  [base-dir compare-dir output-dir file-filter]
-  (let [base-profile-data
-        (average-endpoint-info-for-dir base-dir file-filter)
-        compare-profile-data
-        (average-endpoint-info-for-dir compare-dir file-filter)
-        base-greater-than-compare-data
+  [base-profile-data compare-profile-data output-dir]
+  (let [base-greater-than-compare-data
         (sort-methods-in-endpoints-by-mean-total-time-per-call
          (filter-for-endpoint-methods-having-greater-mean-total-time-per-call
           compare-profile-data
@@ -320,13 +342,18 @@
   (-> raw-path fs/file (.getCanonicalPath)))
 
 (def cli-options
-  [["-o" "--output-dir OUTPUT_DIR" "Output directory"
+  [["-a" "--load-average-info-from-files"
+    "Load the endpoint average info from json files"
+    :id :load-average-info-from-files
+    :default false]
+   ["-o" "--output-dir OUTPUT_DIR" "Output directory"
     :id :output-dir
     :default "."
     :parse-fn canonicalized-path
     :validate [fs/readable? "Output directory must be readable"]]
-   ["-c" "--compare-dir COMPARE_DIR" "Compare directory with json files"
-    :id :compare-dir
+   ["-c" "--compare-dir-or-file COMPARE_DIR_OR_FILE"
+    "Compare directory with json files or an individual file"
+    :id :compare-dir-or-file
     :default nil
     :parse-fn canonicalized-path
     :validate [fs/readable? "Compare directory must be readable"]]
@@ -340,12 +367,12 @@
 (defn usage [options-summary]
   (->> ["Aggregate info from jruby profile json files."
         ""
-        "Usage: jruby-profile-aggregator [options] base-dir"
+        "Usage: jruby-profile-aggregator [options] base-dir-or-file"
         ""
         "Options:"
         options-summary
         ""
-        "base-dir: Base directory with json files"]
+        "base-dir: Base directory with json files or individual json file"]
        (string/join \newline)))
 
 (defn error-msg [errors]
@@ -356,6 +383,21 @@
   (println msg)
   (System/exit status))
 
+(defn average-endpoint-info
+  [load-average-info-from-files? dir-or-file file-filter]
+  (if load-average-info-from-files?
+    (do
+      (if-not (fs/file? dir-or-file)
+        (throw (IllegalArgumentException.
+                (str "Value must be a file: " dir-or-file))))
+      (load-average-endpoint-info-from-json-file
+       dir-or-file))
+    (do
+      (if-not (fs/directory? dir-or-file)
+        (throw (IllegalArgumentException.
+                (str "Value must be a directory: " dir-or-file))))
+      (average-endpoint-info-for-dir dir-or-file file-filter))))
+
 (defn -main
   [& args]
   (let [{:keys [options arguments errors summary]}
@@ -364,16 +406,31 @@
       (:help options) (exit 0 (usage summary))
       (not= (count arguments) 1) (exit 1 (usage summary))
       errors (exit 1 (error-msg errors)))
-    (let [base-dir (-> arguments first canonicalized-path)
+    (let [base-dir-or-file (-> arguments first canonicalized-path)
+          load-average-info-from-files? (:load-average-info-from-files options)
           output-dir (:output-dir options)
           file-filter (:file-filter options)]
-      (if-let [compare-dir (:compare-dir options)]
+      (if-let [compare-dir-or-file (:compare-dir-or-file options)]
         (do
-          (println "Comparing two profile directories...")
-          (compare-profile-dirs base-dir compare-dir output-dir file-filter)
+          (println "Comparing two profiles...")
+          (let [base-profile-data
+                (average-endpoint-info
+                 load-average-info-from-files?
+                 base-dir-or-file
+                 file-filter)
+                compare-profile-data
+                (average-endpoint-info
+                 load-average-info-from-files?
+                 compare-dir-or-file
+                 file-filter)]
+            (compare-profile-dirs base-profile-data
+                                  compare-profile-data
+                                  output-dir))
           (printf "Wrote files to: %s\n" output-dir))
         (do
-          (printf "Processing a single profile dir: %s...\n"
-                  base-dir)
+          (printf "Processing a single profile: %s...\n"
+                  base-dir-or-file)
           (printf "Wrote file: %s\n"
-                  (process-one-profile-dir base-dir output-dir file-filter)))))))
+                  (process-one-profile-dir base-dir-or-file
+                                           output-dir
+                                           file-filter)))))))
