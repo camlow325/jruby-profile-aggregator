@@ -2,6 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
             [clojure.tools.cli :as cli]
+            [clojure.tools.logging :as log]
             [cheshire.core :as cheshire]
             [me.raynes.fs :as fs]))
 
@@ -267,17 +268,20 @@
 
 (defn load-average-endpoint-info-from-json-file
   [input-file]
+  (log/infof "Loading file: %s..." input-file)
   (hash-endpoints-by-name
    (cheshire/parse-stream (io/reader input-file) true)))
 
 (defn write-to-json-file
   [profile-data output-file]
+  (log/infof "Writing file: %s..." output-file)
   (cheshire/generate-stream
    profile-data
    (io/writer output-file)))
 
 (defn write-to-flat-file
   [profile output-file flip-base-vs-comparison-data?]
+  (log/infof "Writing file: %s..." output-file)
   (with-open [wrtr (io/writer output-file)]
     (.write wrtr (apply str (repeat 35 "-")))
     (.newLine wrtr)
@@ -359,6 +363,20 @@
 
 (defn compare-profile-dirs
   [base-profile-data compare-profile-data output-dir]
+  (write-to-json-file
+   (sort-methods-in-endpoints
+    base-profile-data
+    :total-time
+    :mean-total-time-per-call)
+   (str output-dir "/base-aggregated-profile.json"))
+  (write-to-json-file
+   (sort-methods-in-endpoints
+    compare-profile-data
+    :total-time
+    :mean-total-time-per-call)
+   (str output-dir "/compare-aggregated-profile.json"))
+
+  (log/info "Comparing base vs. comp aggregated profile...")
   (let [base-greater-than-compare-data
         (sort-methods-in-endpoints
          (filter-for-endpoint-methods-having-greater-total-time
@@ -369,8 +387,18 @@
           :mean-comparison-time-per-call)
          (juxt
           :total-time-increase-per-endpoint-call-over-base
-          :total-time-per-endpoint-call))
-        compare-greater-than-base-data
+          :total-time-per-endpoint-call))]
+    (write-to-json-file
+     (flip-endpoint-base-and-comparison-elements
+      base-greater-than-compare-data)
+     (str output-dir "/base-greater-aggregated-profile.json"))
+    (write-to-flat-file
+     base-greater-than-compare-data
+     (str output-dir "/base-greater-aggregated-profile.txt")
+     true))
+
+  (log/info "Comparing comp vs. base aggregated profile...")
+  (let [compare-greater-than-base-data
         (sort-methods-in-endpoints
          (filter-for-endpoint-methods-having-greater-total-time
           base-profile-data
@@ -381,26 +409,6 @@
          (juxt
           :total-time-increase-per-endpoint-call-over-base
           :total-time-per-endpoint-call))]
-    (write-to-json-file
-     (sort-methods-in-endpoints
-      base-profile-data
-      :total-time
-      :mean-total-time-per-call)
-     (str output-dir "/base-aggregated-profile.json"))
-    (write-to-json-file
-     (sort-methods-in-endpoints
-      compare-profile-data
-      :total-time
-      :mean-total-time-per-call)
-     (str output-dir "/compare-aggregated-profile.json"))
-    (write-to-json-file
-     (flip-endpoint-base-and-comparison-elements
-      base-greater-than-compare-data)
-     (str output-dir "/base-greater-aggregated-profile.json"))
-    (write-to-flat-file
-     base-greater-than-compare-data
-     (str output-dir "/base-greater-aggregated-profile.txt")
-     true)
     (write-to-json-file
      compare-greater-than-base-data
      (str output-dir "/compare-greater-aggregated-profile.json"))
@@ -484,7 +492,7 @@
           file-filter (:file-filter options)]
       (if-let [compare-dir-or-file (:compare-dir-or-file options)]
         (do
-          (println "Comparing two profiles...")
+          (log/info "Comparing two profiles...")
           (let [base-profile-data
                 (average-endpoint-info
                  load-average-info-from-files?
@@ -498,11 +506,10 @@
             (compare-profile-dirs base-profile-data
                                   compare-profile-data
                                   output-dir))
-          (printf "Wrote files to: %s\n" output-dir))
+          (log/infof "Wrote files to: %s" output-dir))
         (do
-          (printf "Processing a single profile: %s...\n"
-                  base-dir-or-file)
-          (printf "Wrote file: %s\n"
-                  (process-one-profile-dir base-dir-or-file
-                                           output-dir
-                                           file-filter)))))))
+          (log/infof "Processing a single profile: %s..." base-dir-or-file)
+          (log/infof "Wrote file: %s" (process-one-profile-dir
+                                       base-dir-or-file
+                                       output-dir
+                                       file-filter)))))))
