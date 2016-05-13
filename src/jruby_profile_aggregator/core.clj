@@ -65,12 +65,26 @@
    (update-summary-totals-for-file-entry entry profile-data)
    (get profile-data "methods")))
 
+(defn get-endpoint
+  "Get the top-level endpoint for aggregation from a fully-qualified file name
+  and the directory under which the endpoints are rooted.  Assumes that the
+  interesting top-level endpoint is no more than 3 deep from the root.
+
+  For example, if the fully-qualified file is '/one/two/puppet/v3/catalog/node1'
+  and the root directory is '/one/two', the '/one/two' is clipped off of the
+  front and the next three segments, '/puppet/v3/catalog', are retained."
+  [file dir]
+  (let [endpoint-sub-dir (subs (.getParent file) (count dir))]
+    (->> (string/split endpoint-sub-dir #"/")
+         (take 4)
+         (string/join "/"))))
+
 (defn sum-endpoint-info-for-dir-or-file
   [dir file-filter]
   (reduce
    (fn [acc json-file]
      (update acc
-             (subs (.getParent json-file) (count dir))
+             (get-endpoint json-file dir)
              update-file-entry
              (cheshire/parse-stream (io/reader json-file))))
    {}
